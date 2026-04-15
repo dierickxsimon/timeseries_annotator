@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ts-annotator"
-version = "0.1.0"
+version = "1.0.0"
 description = "Interactive time series annotation widget for Marimo and Streamlit"
 readme = "README.md"
 license = "MIT"
