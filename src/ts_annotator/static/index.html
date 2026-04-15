@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="module">
+
+      // Minimal Streamlit component bridge using postMessage so we do not
+      // depend on external CDN assets in deployed environments.
+      const Streamlit = {
+        RENDER_EVENT: "streamlit:render",
+        events: {
+          addEventListener(type, callback) {
+            window.addEventListener("message", (event) => {
+              const payload = event && event.data;
+              if (!payload || payload.type !== type) {
+                return;
+              }
+              callback({ detail: payload });
+            });
+          },
+        },
+        setComponentReady() {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:componentReady",
+              apiVersion: 1,
+            },
+            "*",
+          );
+        },
+        setFrameHeight(height) {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setFrameHeight",
+              height,
+            },
+            "*",
+          );
+        },
+        setComponentValue(value) {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setComponentValue",
+              value,
+            },
+            "*",
+          );
+        },
+      };
+
+      const root = document.getElementById("root");
+      let cleanup = null;
+      let renderPromise = null;
+      let latestAnnotations = null;
+      let lastInputKey = null;
+
+      function resolveRender(mod) {
+        if (!mod) {
+          return null;
+        }
+
+        if (typeof mod.render === "function") {
+          return mod.render;
+        }
+
+        if (typeof mod.default === "function") {
+          return mod.default;
+        }
+
+        if (mod.default && typeof mod.default.render === "function") {
+          return mod.default.render;
+        }
+
+        return null;
+      }
+
+      function loadRender(timeoutMs = 15000) {
+        if (!renderPromise) {
+          const modulePromise = (async () => {
+            try {
+              const bundled = await import("./widget.bundle.js");
+              const bundledRender = resolveRender(bundled);
+              if (bundledRender) {
+                return bundledRender;
+              }
+              throw new Error("widget.bundle.js did not export a render function");
+            } catch (bundleErr) {
+              console.warn("Failed to load widget.bundle.js, trying widget.js", bundleErr);
+              const source = await import("./widget.js");
+              const sourceRender = resolveRender(source);
+              if (sourceRender) {
+                return sourceRender;
+              }
+              throw new Error("widget.js did not export a render function");
+            }
+          })();
+          const timeoutPromise = new Promise((_, reject) => {
+            window.setTimeout(() => {
+              reject(new Error("Timed out loading widget bundle"));
+            }, timeoutMs);
+          });
+          renderPromise = Promise.race([modulePromise, timeoutPromise]);
+        }
+        return renderPromise;
+      }
+
+      function safeJsonStringify(value, fallback) {
+        try {
+          return JSON.stringify(value ?? fallback);
+        } catch {
+          return JSON.stringify(fallback);
+        }
+      }
+
+      function updateFrameHeight() {
+        Streamlit.setFrameHeight(document.documentElement.scrollHeight);
+      }
+
+      function getInputKey(data, labels) {
+        const n = Array.isArray(data) ? data.length : 0;
+        return `${n}|${safeJsonStringify(labels, [])}`;
+      }
+
+      async function onRender(event) {
+        const args = event.detail?.args ?? {};
+        const labels = Array.isArray(args.labels) ? args.labels : [];
+        const defaultAnnotations = Array.isArray(args.default_annotations)
+          ? args.default_annotations
+          : [];
+        const inputKey = getInputKey(args.data, labels);
+        const shouldReuse = inputKey === lastInputKey && Array.isArray(latestAnnotations);
+        const initialAnnotations = shouldReuse ? latestAnnotations : defaultAnnotations;
+        lastInputKey = inputKey;
+
+        if (cleanup) {
+          cleanup();
+          cleanup = null;
+        }
+
+        const model = {
+          _data: {
+            data_json: safeJsonStringify(args.data, []),
+            labels_json: safeJsonStringify(labels, []),
+            sample_rate: Number(args.sample_rate ?? 1),
+            x_label: args.x_label || "Sample",
+            y_label: args.y_label || "Value",
+            annotations_json: JSON.stringify(initialAnnotations),
+          },
+          get(key) {
+            return this._data[key];
+          },
+          set(key, value) {
+            this._data[key] = value;
+          },
+          // Streamlit shim: anywidget renderers may subscribe to model changes.
+          on() {},
+          off() {},
+          save_changes() {
+            try {
+              const parsed = JSON.parse(this._data.annotations_json);
+              latestAnnotations = parsed;
+              Streamlit.setComponentValue(parsed);
+            } catch {
+              latestAnnotations = [];
+              Streamlit.setComponentValue([]);
+            }
+            requestAnimationFrame(updateFrameHeight);
+          },
+        };
+
+        latestAnnotations = initialAnnotations;
+
+        try {
+          const render = await loadRender();
+          cleanup = render({ model, el: root });
+        } catch (error) {
+          console.error("ts_annotator frontend failed to load", error);
+          root.innerHTML =
+            '<div style="padding:12px;color:#6B7280;font-family:monospace;font-size:12px;">Failed to load annotator frontend assets.</div>';
+          Streamlit.setComponentValue(initialAnnotations);
+        }
+        requestAnimationFrame(updateFrameHeight);
+      }
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+      // Notify Streamlit after listeners are attached to avoid a race where
+      // the first render event arrives before the handler is registered.
+      Streamlit.setComponentReady();
+      updateFrameHeight();
+    </script>
+  </body>
+</html>

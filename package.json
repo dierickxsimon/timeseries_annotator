@@ -1,0 +1,20 @@
+{
+  "name": "ts-annotator",
+  "version": "1.0.0",
+  "description": "Interactive time series annotation widget for **Marimo** and **Streamlit**.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "build": "esbuild src/ts_annotator/static/widget.js --bundle --format=esm --outfile=src/ts_annotator/static/widget.bundle.js",
+    "watch": "esbuild src/ts_annotator/static/widget.js --bundle --format=esm --outfile=src/ts_annotator/static/widget.bundle.js --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "esbuild": "^0.28.0"
+  }
+}
